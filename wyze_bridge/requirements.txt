@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+asyncio
+wyze-sdk
+python-dotenv

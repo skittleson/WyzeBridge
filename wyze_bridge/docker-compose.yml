@@ -1,0 +1,15 @@
+version: '3'
+
+services:
+  wyze-bridge-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wyze-bridge-api
+    ports:
+      - "8000:8000"
+    environment:
+      - WYZE_EMAIL=${WYZE_EMAIL}
+      - WYZE_PASSWORD=${WYZE_PASSWORD}
+      - WYZE_KEY_ID=${WYZE_KEY_ID}
+      - WYZE_API_KEY=${WYZE_API_KEY}
