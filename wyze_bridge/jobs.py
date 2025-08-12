@@ -61,7 +61,7 @@ async def events_download_job(manager: WyzeClientManager):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI, manager: WyzeClientManager):
-    task01 = asyncio.create_task(refresh_token_job(manager))
+    task01 = asyncio.create_task(schedule_job(refresh_token_job(manager)))
     task02 = asyncio.create_task(events_download_job(manager))
     yield
     task01.cancel()

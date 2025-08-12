@@ -18,3 +18,9 @@ docker run -e WYZE_EMAIL=your_email -e WYZE_PASSWORD=your_password -e WYZE_KEY_I
 ```
 
 Or use the docker-compose.yml
+
+
+## Fix
+- [ ] refresh tokens are not working on a job
+- [ ] merge lock functionality into device post endpoint?!
+- 
