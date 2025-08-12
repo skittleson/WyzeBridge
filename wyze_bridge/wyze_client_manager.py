@@ -1,5 +1,3 @@
-import json
-
 import requests
 import os
 from wyze_sdk import Client
@@ -123,21 +121,6 @@ class WyzeClientManager:
             print(f"An error occurred while getting door lock: {e}")
         return None
 
-    def get_lock_by_name(self, name: str):
-        """
-        Retrieves a lock object by its nickname.
-
-        This method searches for a lock with the given nickname among the available locks
-        and returns the corresponding lock object. If no lock with the specified nickname
-        is found, it returns None.
-        """
-        locks = self.get_locks()
-        lock = next((l for l in locks if l["nickname"] == name), None)
-        if lock:
-            lock_id = lock["mac"]
-            return self.get_lock(lock_id)
-        return None
-
     def update_lock(self, lock_id: str, lock_action: bool) -> bool:
         """
         Updates the lock status of a given lock.
@@ -157,7 +140,7 @@ class WyzeClientManager:
             self.client.locks.unlock(lock_id)
         return True
 
-    def get_devices(self, filter_query=None, orderby=None, select=None):
+    def get_devices(self, filter_query=list[str], orderby=None, select=None):
         devices = self.client.devices_list()
         device_dicts = []
 
@@ -172,8 +155,11 @@ class WyzeClientManager:
             device_dicts.append(device_info)
 
         if filter_query:
-            for key, value in filter_query.items():
-                device_dicts = [device for device in device_dicts if device.get(key) == value]
+            filter_query_kv = [item.split('=', 1) for item in filter_query]
+            for kv in filter_query_kv:
+                device_dicts = [device for device in device_dicts if device.get(kv[0]) == kv[1]]
+        if device_dicts is None:
+            return KeyError("No Device Found")
 
         if select:
             if not isinstance(select, list):
@@ -189,3 +175,19 @@ class WyzeClientManager:
 
         return device_dicts
 
+    def get_device(self, device_id: str):
+        devices = self.client.devices_list()
+        for device in devices:
+            if device.mac == device_id:
+                result =  {
+                    "nickname": device.nickname,
+                    "mac": device.mac,
+                    "type": device.type,
+                    "product_type": device.product.type
+                }
+                if result['type'] == 'Lock':
+                    lock = self.get_lock(device_id)
+                    result = lock | result
+                return result
+
+        return None

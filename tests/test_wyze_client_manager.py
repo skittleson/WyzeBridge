@@ -2,7 +2,6 @@ import unittest
 from unittest.mock import patch, MagicMock
 import os
 import shutil
-
 from wyze_sdk.errors import WyzeApiError
 
 from wyze_bridge.wyze_client_manager import WyzeClientManager  # Import the class from your module

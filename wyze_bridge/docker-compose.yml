@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     container_name: wyze-bridge-api
     ports:
-      - "8000:8000"
+      - "7020:7020"
     environment:
       - WYZE_EMAIL=${WYZE_EMAIL}
       - WYZE_PASSWORD=${WYZE_PASSWORD}

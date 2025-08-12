@@ -2,7 +2,7 @@ import random
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
-from wyze_bridge.wyze_client_manager import WyzeClientManager
+from wyze_client_manager import WyzeClientManager
 
 
 async def schedule_job(manager: WyzeClientManager, job_function, sleep_minutes: int) -> None:
