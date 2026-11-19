@@ -1,10 +1,10 @@
-# Wyze Front Door lock, via wyze-bridge-api on homelab (192.168.4.233:7020).
+# Wyze Front Door lock, via wyze-bridge-api behind Caddy at wyze-api.home.lan.
 # Source: github.com/skittleson/WyzeBridge (GET /locks/{mac} = full status, cached ~20s).
-# Same file is used by both HAs (homelab and 192.168.4.245). Keep entity ids stable:
+# Same file is used by both Home Assistant instances. Keep entity ids stable:
 # automations use lock.wyze_front_door.
 ---
 rest:
-  - resource: http://192.168.4.233:7020/locks/YD.LO1.404794b418db6df0a9e90341a787fefa
+  - resource: http://wyze-api.home.lan/locks/YD.LO1.404794b418db6df0a9e90341a787fefa
     scan_interval: 30
     timeout: 20
     sensor:
@@ -59,7 +59,7 @@ rest:
 
 rest_command:
   wyze_lock_door:
-    url: "http://192.168.4.233:7020/locks/YD.LO1.404794b418db6df0a9e90341a787fefa?lock_action={{ (lock_action == 'lock') | lower }}"
+    url: "http://wyze-api.home.lan/locks/YD.LO1.404794b418db6df0a9e90341a787fefa?lock_action={{ (lock_action == 'lock') | lower }}"
     method: PUT
     timeout: 20
 
