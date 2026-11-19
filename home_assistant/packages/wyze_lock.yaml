@@ -1,0 +1,98 @@
+# Wyze Front Door lock, via wyze-bridge-api on homelab (192.168.4.233:7020).
+# Source: github.com/skittleson/WyzeBridge (GET /locks/{mac} = full status, cached ~20s).
+# Same file is used by both HAs (homelab and 192.168.4.245). Keep entity ids stable:
+# automations use lock.wyze_front_door.
+---
+rest:
+  - resource: http://192.168.4.233:7020/locks/YD.LO1.404794b418db6df0a9e90341a787fefa
+    scan_interval: 30
+    timeout: 20
+    sensor:
+      - name: "Wyze Front Door State"
+        unique_id: wyze_front_door_state
+        icon: mdi:lock-question
+        value_template: "{{ value_json.state }}"
+      - name: "Wyze Front Door Battery"
+        unique_id: wyze_front_door_battery
+        value_template: "{{ value_json.battery }}"
+        unit_of_measurement: "%"
+        device_class: battery
+      - name: "Wyze Front Door Last Event"
+        unique_id: wyze_front_door_last_event
+        icon: mdi:history
+        value_template: "{{ value_json.last_event.description if value_json.last_event else 'none' }}"
+        json_attributes_path: "$.last_event"
+        json_attributes: [type, time, source]
+      - name: "Wyze Front Door Last Event Time"
+        unique_id: wyze_front_door_last_event_time
+        device_class: timestamp
+        value_template: "{{ value_json.last_event.time if value_json.last_event else none }}"
+      - name: "Wyze Front Door Firmware"
+        unique_id: wyze_front_door_firmware
+        icon: mdi:chip
+        value_template: "{{ value_json.firmware }}"
+      - name: "Wyze Lock Gateway Signal"
+        unique_id: wyze_lock_gateway_signal
+        device_class: signal_strength
+        unit_of_measurement: dBm
+        value_template: "{{ value_json.gateway_rssi }}"
+        availability: "{{ value_json.gateway_rssi is not none }}"
+    binary_sensor:
+      - name: "Wyze Front Door Locked"
+        unique_id: wyze_front_door_locked
+        device_class: lock
+        # device_class lock: on = unlocked
+        value_template: "{{ not value_json.is_locked }}"
+      - name: "Wyze Front Door Door"
+        unique_id: wyze_front_door_door
+        device_class: door
+        value_template: "{{ value_json.door_open }}"
+        availability: "{{ value_json.door_open is not none }}"
+      - name: "Wyze Front Door Online"
+        unique_id: wyze_front_door_online
+        device_class: connectivity
+        value_template: "{{ value_json.online }}"
+      - name: "Wyze Front Door Jammed"
+        unique_id: wyze_front_door_jammed
+        device_class: problem
+        value_template: "{{ value_json.state == 'jammed' }}"
+
+rest_command:
+  wyze_lock_door:
+    url: "http://192.168.4.233:7020/locks/YD.LO1.404794b418db6df0a9e90341a787fefa?lock_action={{ (lock_action == 'lock') | lower }}"
+    method: PUT
+    timeout: 20
+
+script:
+  wyze_front_door_command:
+    alias: "Wyze Front Door command"
+    mode: queued
+    fields:
+      lock_action:
+        description: "lock or unlock"
+    sequence:
+      - action: rest_command.wyze_lock_door
+        data:
+          lock_action: "{{ lock_action }}"
+      # The bridge clears its cache on a command; re-read once the bolt has moved.
+      - delay: 4
+      - action: homeassistant.update_entity
+        target:
+          entity_id: sensor.wyze_front_door_state
+
+template:
+  - lock:
+      - unique_id: wyze_front_door
+        name: "Wyze Front Door"
+        state: "{{ states('sensor.wyze_front_door_state') }}"
+        availability: >-
+          {{ is_state('binary_sensor.wyze_front_door_online', 'on')
+             and states('sensor.wyze_front_door_state') not in ['unknown', 'unavailable'] }}
+        lock:
+          - action: script.wyze_front_door_command
+            data:
+              lock_action: lock
+        unlock:
+          - action: script.wyze_front_door_command
+            data:
+              lock_action: unlock
