@@ -95,7 +95,12 @@ All endpoints use **JSON** for responses and accept the same where applicable.
 | `GET`  | `/events` | List event‑image filenames stored in the output directory. |
 | `GET`  | `/events/{event_id}` | Return the raw JPEG for the given event ID. |
 | `POST` | `/events` | Trigger a quick rescan of camera events and download images. |
-| `PUT`  | `/locks/{lock_id}` | Payload: `{ "lock_action": true | false }`. Locks or unlocks the specified lock. |
+| `GET`  | `/locks` | List locks (MAC and nickname). |
+| `GET`  | `/locks/{lock_id}` | Full lock status: `state` (`locked`, `unlocked`, `locking`, `unlocking`, `jammed`, `unknown`), `door_open` (`null` when the door sensor is off), `online`, `battery`, `firmware`, `gateway_rssi`, `last_event` (`type`, `description`, `time`, `source`). |
+| `GET`  | `/locks/{lock_id}/events?limit=N` | Recent lock history, newest first (1-100, default 20). Includes jams and door-left-open alerts. |
+| `PUT`  | `/locks/{lock_id}?lock_action=true\|false` | Locks (`true`) or unlocks (`false`) the lock. Returns `502` if Wyze rejects the command. |
+
+> **Caching:** lock status and history are cached for `WYZE_LOCK_CACHE_SECONDS` (default 20) so several Home Assistant pollers share one Wyze call; Wyze rate-limits heavily. Any lock or unlock command clears the cache. Gateway signal is cached for 5 minutes.
 
 > **Note:** The scheduler in `wyze_bridge/jobs.py` automatically refreshes tokens and pulls new events in the background.
 
