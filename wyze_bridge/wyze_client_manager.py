@@ -4,9 +4,13 @@
 # importable without the SDK, we lazily import it and fall back to a stub
 # when it cannot be loaded.
 
+import datetime
 import os
+import time
+from collections.abc import Callable
+from typing import Any, ClassVar, Dict, List, Optional
+
 import requests
-from typing import Any, List, Dict, Optional
 
 # Try to import the real SDK; fallback to a minimal stub.
 try:
@@ -27,6 +31,13 @@ class WyzeClientManager:
     # Default directory for event images.
     DEFAULT_OUTPUT_DIR = "../event_images"
 
+    # Wyze rate-limits aggressively, so polling clients share one recent answer.
+    LOCK_CACHE_SECONDS = float(os.getenv("WYZE_LOCK_CACHE_SECONDS", "20"))
+    GATEWAY_CACHE_SECONDS = 300.0
+
+    LOCK_STATES: ClassVar[dict[int, str]] = {1: "locked", 2: "locking", 3: "unlocked", 4: "unlocking"}
+    JAM_EVENTS: ClassVar[set[str]] = {"JAMMED", "TOTALLY_JAMMED"}
+
     def __init__(
         self,
         email: str = "",
@@ -34,9 +45,12 @@ class WyzeClientManager:
         key_id: str = "",
         api_key: str = "",
         client: Any = Client,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         # Store a client instance – the actual SDK may be a mock in tests.
         self.client = client(email=email, password=password, key_id=key_id, api_key=api_key)
+        self._clock = clock
+        self._cache: dict[str, Any] = {}
         # Allow tests to override the output directory.
         self.OUTPUT_DIR = os.getenv("WYZE_OUTPUT_DIR", self.DEFAULT_OUTPUT_DIR)
         self.__ensure_dir_exists()
@@ -130,8 +144,99 @@ class WyzeClientManager:
             else:
                 self.client.locks.unlock(lock_id)
             return True
-        except Exception:  # pragma: no cover - API errors
+        except Exception as e:  # pragma: no cover - API errors
+            print(f"Failed to {'lock' if lock_action else 'unlock'} {lock_id}: {e}")
             return False
+        finally:
+            self.clear_cache()
+
+    # ------------------------------------------------------------------
+    # Full lock status for Home Assistant
+    # ------------------------------------------------------------------
+    def clear_cache(self) -> None:
+        self._cache = {}
+
+    def _cached(self, key: str, ttl: float, fetch: Callable[[], Any]) -> Any:
+        now = self._clock()
+        hit = self._cache.get(key)
+        if hit is not None and now - hit[0] < ttl:
+            return hit[1]
+        value = fetch()
+        self._cache[key] = (now, value)
+        return value
+
+    @staticmethod
+    def _value(prop: Any) -> Any:
+        return getattr(prop, "value", prop)
+
+    @staticmethod
+    def _event_to_dict(record: Any) -> dict[str, Any]:
+        event_time = record.time
+        if isinstance(event_time, datetime.datetime):
+            if event_time.tzinfo is None:
+                event_time = event_time.astimezone()
+            event_time = event_time.isoformat()
+        source = getattr(getattr(record, "details", None), "source", None)
+        return {
+            "type": record.type.name.lower() if hasattr(record.type, "name") else str(record.type),
+            "description": getattr(record.type, "description", None),
+            "time": event_time,
+            "source": getattr(source, "description", None),
+        }
+
+    def _fetch_records(self, lock_id: str, limit: int) -> list[Any]:
+        return list(
+            self.client.locks.get_records(device_mac=lock_id, since=datetime.datetime.now(), limit=limit)
+        )
+
+    def get_lock_events(self, lock_id: str, limit: int = 20) -> list[dict[str, Any]]:
+        records = self._cached(
+            f"events:{lock_id}:{limit}", self.LOCK_CACHE_SECONDS, lambda: self._fetch_records(lock_id, limit)
+        )
+        return [self._event_to_dict(r) for r in records]
+
+    def _gateway_rssi(self) -> int | None:
+        def fetch() -> int | None:
+            try:
+                gateways = [d for d in self.client.devices_list() if d.type == "GateWay"]
+                if not gateways:
+                    return None
+                return self.client.locks.gateways.info(device_mac=gateways[0].mac).rssi
+            except Exception as e:  # SDK gateway support is unreliable
+                print(f"Could not read lock gateway: {e}")
+                return None
+
+        return self._cached("gateway_rssi", self.GATEWAY_CACHE_SECONDS, fetch)
+
+    def get_lock_status(self, lock_id: str) -> dict[str, Any] | None:
+        info = self._cached(
+            f"info:{lock_id}", self.LOCK_CACHE_SECONDS, lambda: self.client.locks.info(device_mac=lock_id)
+        )
+        if info is None:
+            return None
+        try:
+            events = self.get_lock_events(lock_id, limit=1)
+        except Exception as e:  # history is optional, the lock state is not
+            print(f"Could not read lock history: {e}")
+            events = []
+        last_event = events[0] if events else None
+
+        state = self.LOCK_STATES.get(self._value(info.lock_state), "unknown")
+        if last_event and last_event["type"].upper() in self.JAM_EVENTS:
+            state = "jammed"
+
+        return {
+            "mac": info.mac,
+            "nickname": info.nickname,
+            "is_locked": info.is_locked,
+            "state": state,
+            "door_open": bool(info.is_open) if getattr(info, "door_sensor", True) else None,
+            "online": bool(info.is_online),
+            "battery": self._value(info.voltage),
+            "firmware": info.firmware_version,
+            "gateway_rssi": self._gateway_rssi(),
+            "last_event": last_event,
+        }
 
     def get_devices(self, filter_query=None, orderby=None, select=None):
         devices = self.client.devices_list()
