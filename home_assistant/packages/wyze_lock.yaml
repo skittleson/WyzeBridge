@@ -38,7 +38,7 @@ rest:
         device_class: signal_strength
         unit_of_measurement: dBm
         value_template: "{{ value_json.gateway_rssi }}"
-        availability: "{{ value_json.gateway_rssi is not none }}"
+        availability: "{{ value_json is defined and value_json.gateway_rssi is not none }}"
     binary_sensor:
       - name: "Wyze Front Door Locked"
         unique_id: wyze_front_door_locked
@@ -49,7 +49,7 @@ rest:
         unique_id: wyze_front_door_door
         device_class: door
         value_template: "{{ value_json.door_open }}"
-        availability: "{{ value_json.door_open is not none }}"
+        availability: "{{ value_json is defined and value_json.door_open is not none }}"
       - name: "Wyze Front Door Online"
         unique_id: wyze_front_door_online
         device_class: connectivity

@@ -247,6 +247,109 @@ class WyzeClientManager:
             "last_event": last_event,
         }
 
+    # ------------------------------------------------------------------
+    # Cameras: basic details and cloud events (no live streams)
+    # ------------------------------------------------------------------
+    CAMERA_CACHE_SECONDS = float(os.getenv("WYZE_CAMERA_CACHE_SECONDS", "60"))
+    MAX_EVENTS = 20  # Wyze's event list API refuses more
+
+    @staticmethod
+    def _event_time(event: Any) -> datetime.datetime:
+        value = event.time
+        if isinstance(value, (int, float)):  # the SDK sometimes passes Wyze's epoch ms through
+            return datetime.datetime.fromtimestamp(value / 1000, datetime.timezone.utc)
+        if isinstance(value, datetime.datetime) and value.tzinfo is None:
+            return value.astimezone()
+        return value
+
+    def _camera_event_to_dict(self, event: Any) -> dict[str, Any]:
+        event_time = self._event_time(event)
+        if isinstance(event_time, datetime.datetime):
+            if event_time.tzinfo is None:
+                event_time = event_time.astimezone()
+            event_time = event_time.isoformat()
+        alarm = getattr(event, "alarm_type", None)
+        return {
+            "id": event.id,
+            "time": event_time,
+            "type": getattr(alarm, "description", None) or str(alarm),
+            "tags": [getattr(t, "description", str(t)) for t in (getattr(event, "tags", None) or []) if t],
+        }
+
+    SEED_DAYS = 30
+
+    def _camera_list(self) -> list[Any]:
+        return self._cached(
+            "cameras",
+            self.CAMERA_CACHE_SECONDS,
+            lambda: [d for d in self.client.devices_list() if d.type == "Camera"],
+        )
+
+    def _remember_event(self, mac: str, event: Any) -> None:
+        current = self._camera_events.get(mac)
+        if current is None or self._event_time(event) > self._event_time(current):
+            self._camera_events[mac] = event
+
+    def _refresh_camera_events(self) -> None:
+        """Keep the newest event seen per camera.
+
+        Wyze returns at most 20 events per call, so one shared call covers the busy
+        cameras; each refresh also looks up one camera that has no event yet.
+        """
+        if not hasattr(self, "_camera_events"):
+            self._camera_events: dict[str, Any] = {}
+            self._seeded: set[str] = set()
+
+        def refresh() -> bool:
+            macs = [c.mac for c in self._camera_list()]
+            if not macs:
+                return True
+            for event in self.client.events.list(device_ids=macs, limit=self.MAX_EVENTS):
+                self._remember_event(event.mac, event)
+            quiet = next((m for m in macs if m not in self._camera_events and m not in self._seeded), None)
+            if quiet is not None:
+                self._seeded.add(quiet)
+                begin = datetime.datetime.now() - datetime.timedelta(days=self.SEED_DAYS)
+                for event in self.client.events.list(device_ids=[quiet], begin=begin, limit=1):
+                    self._remember_event(quiet, event)
+            return True
+
+        self._cached("camera_events", self.CAMERA_CACHE_SECONDS, refresh)
+
+    def _latest_camera_event(self, camera: Any) -> Any | None:
+        self._refresh_camera_events()
+        return self._camera_events.get(camera.mac)
+
+    def _camera_to_dict(self, camera: Any) -> dict[str, Any]:
+        latest = self._latest_camera_event(camera)
+        return {
+            "mac": camera.mac,
+            "nickname": camera.nickname,
+            "model": getattr(camera.product, "model", None),
+            "online": bool(self._value(camera.is_online)),
+            "firmware": camera.firmware_version,
+            "ip": camera.ip,
+            "rssi": self._value(camera.rssi),
+            "ssid": camera.ssid,
+            "battery": self._value(camera.voltage),
+            "last_event": self._camera_event_to_dict(latest) if latest else None,
+        }
+
+    def get_cameras(self) -> list[dict[str, Any]]:
+        return [self._camera_to_dict(c) for c in self._camera_list()]
+
+    def get_camera(self, mac: str) -> dict[str, Any] | None:
+        return next((c for c in self.get_cameras() if c["mac"] == mac), None)
+
+    def get_camera_events(self, mac: str, limit: int = MAX_EVENTS) -> list[dict[str, Any]]:
+        limit = min(limit, self.MAX_EVENTS)
+        events = self._cached(
+            f"camera_events:{mac}:{limit}",
+            self.CAMERA_CACHE_SECONDS,
+            lambda: list(self.client.events.list(device_ids=[mac], limit=limit)),
+        )
+        return [self._camera_event_to_dict(e) for e in events]
+
     def get_devices(self, filter_query=None, orderby=None, select=None):
         devices = self.client.devices_list()
         device_dicts = []
