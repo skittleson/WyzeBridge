@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, Depends
+from fastapi import Depends, FastAPI, HTTPException, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
 from wyze_client_manager import WyzeClientManager
@@ -67,6 +67,24 @@ async def get_event(event_id: str) -> Response:
     if not event_data:
         raise HTTPException(status_code=404, detail="Event file not found")
     return Response(content=event_data, media_type="image/jpeg")
+
+# === Cameras (details + cloud events, no live streams) ===
+@app.get("/cameras")
+async def list_cameras() -> dict:
+    """All cameras; by_mac makes it easy to pick one camera in a Home Assistant template."""
+    cameras = manager.get_cameras()
+    return {"cameras": cameras, "by_mac": {c["mac"]: c for c in cameras}}
+
+@app.get("/cameras/{mac}")
+async def get_camera(mac: str) -> dict:
+    camera = manager.get_camera(mac)
+    if camera is None:
+        raise HTTPException(status_code=404, detail="Camera not found")
+    return camera
+
+@app.get("/cameras/{mac}/events")
+async def get_camera_events(mac: str, limit: int = Query(20, ge=1, le=20)) -> dict:
+    return {"events": manager.get_camera_events(mac, limit=limit)}
 
 # === Locks ===
 @app.get("/locks")
