@@ -188,6 +188,17 @@ class TestLockApi(unittest.TestCase):
         response = self.http.put(f"/locks/{LOCK_MAC}?lock_action=true")
         self.assertEqual(response.status_code, 502)
 
+    def test_lock_action_in_json_body(self):
+        self.manager.update_lock.return_value = True
+        response = self.http.put(f"/locks/{LOCK_MAC}", json={"lock_action": False})
+        self.assertEqual(response.status_code, 200)
+        self.manager.update_lock.assert_called_once_with(LOCK_MAC, False)
+
+    def test_lock_action_query_param_still_works(self):
+        self.manager.update_lock.return_value = True
+        self.http.put(f"/locks/{LOCK_MAC}?lock_action=false")
+        self.manager.update_lock.assert_called_once_with(LOCK_MAC, False)
+
 
 if __name__ == "__main__":
     unittest.main()

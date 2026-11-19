@@ -1,10 +1,12 @@
-# Wyze Front Door lock, via wyze-bridge-api behind Caddy at wyze-api.home.lan.
+# Wyze Front Door lock, via wyze-bridge-api.
 # Source: github.com/skittleson/WyzeBridge (GET /locks/{mac} = full status, cached ~20s).
+# WYZE_LOCK_URL is the bridge's /locks/{mac} URL, set in the Home Assistant container's
+# environment (docker compose .env), e.g. http://wyze-bridge:7020/locks/YD.LO1.xxxx
 # Same file is used by both Home Assistant instances. Keep entity ids stable:
 # automations use lock.wyze_front_door.
 ---
 rest:
-  - resource: http://wyze-api.home.lan/locks/YD.LO1.404794b418db6df0a9e90341a787fefa
+  - resource: !env_var WYZE_LOCK_URL
     scan_interval: 30
     timeout: 20
     sensor:
@@ -59,8 +61,11 @@ rest:
 
 rest_command:
   wyze_lock_door:
-    url: "http://wyze-api.home.lan/locks/YD.LO1.404794b418db6df0a9e90341a787fefa?lock_action={{ (lock_action == 'lock') | lower }}"
+    url: !env_var WYZE_LOCK_URL
     method: PUT
+    content_type: application/json
+    payload: >-
+      {"lock_action": {{ (lock_action == 'lock') | lower }} }
     timeout: 20
 
 script:

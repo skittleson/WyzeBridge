@@ -98,7 +98,7 @@ All endpoints use **JSON** for responses and accept the same where applicable.
 | `GET`  | `/locks` | List locks (MAC and nickname). |
 | `GET`  | `/locks/{lock_id}` | Full lock status: `state` (`locked`, `unlocked`, `locking`, `unlocking`, `jammed`, `unknown`), `door_open` (`null` when the door sensor is off), `online`, `battery`, `firmware`, `gateway_rssi`, `last_event` (`type`, `description`, `time`, `source`). |
 | `GET`  | `/locks/{lock_id}/events?limit=N` | Recent lock history, newest first (1-100, default 20). Includes jams and door-left-open alerts. |
-| `PUT`  | `/locks/{lock_id}?lock_action=true\|false` | Locks (`true`) or unlocks (`false`) the lock. Returns `502` if Wyze rejects the command. |
+| `PUT`  | `/locks/{lock_id}` | Body `{"lock_action": true\|false}` (or `?lock_action=`). Locks (`true`) or unlocks (`false`) the lock. Returns `502` if Wyze rejects the command. |
 
 > **Caching:** lock status and history are cached for `WYZE_LOCK_CACHE_SECONDS` (default 20) so several Home Assistant pollers share one Wyze call; Wyze rate-limits heavily. Any lock or unlock command clears the cache. Gateway signal is cached for 5 minutes.
 
@@ -112,3 +112,21 @@ All endpoints use **JSON** for responses and accept the same where applicable.
 | Token refresh failures | Ensure `WYZE_EMAIL` and `WYZE_PASSWORD` are correct. Review logs for `refresh_token` errors. |
 | Event images not showing | Verify `output` directory permissions. Run `docker exec -it <container> ls ../event_images`. |
 | Lock endpoint stuck | Confirm `lock_id` matches a MAC address. Check `client.locks.lock()` call logs.
+
+## Home Assistant
+
+`home_assistant/packages/wyze_lock.yaml` adds a lock entity (with jammed, locking and unlocking states) plus door, online, jammed, battery, last event, firmware and gateway signal sensors. Copy it into your HA `packages/` folder and give the HA container the bridge URL for your lock in its docker compose `.env`:
+
+```dotenv
+WYZE_LOCK_URL=http://<bridge-host>:7020/locks/<lock-mac>
+```
+
+```yaml
+# Home Assistant docker-compose.yml
+services:
+  homeassistant:
+    environment:
+      WYZE_LOCK_URL: ${WYZE_LOCK_URL}
+```
+
+Find the lock MAC with `GET /locks`.
