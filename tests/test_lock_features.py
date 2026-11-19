@@ -118,6 +118,11 @@ class TestLockStatus(LockFeatureTestBase):
         self.assertIsNone(status["gateway_rssi"])
         self.assertEqual(status["state"], "locked")
 
+    def test_gateway_rssi_falls_back_to_device_list(self):
+        self.client.locks.gateways.info.side_effect = RuntimeError("sdk bug")
+        self.client.devices_list.return_value = [SimpleNamespace(mac=GATEWAY_MAC, type="GateWay", rssi=-70)]
+        self.assertEqual(self.manager.get_lock_status(LOCK_MAC)["gateway_rssi"], -70)
+
 
 class TestLockEvents(LockFeatureTestBase):
     def test_lists_recent_events(self):
@@ -129,6 +134,12 @@ class TestLockEvents(LockFeatureTestBase):
         self.assertEqual([e["type"] for e in events], ["unlocked", "open_too_long"])
         self.assertEqual(events[0]["source"], "Keypad")
         self.assertEqual(self.client.locks.get_records.call_args.kwargs["limit"], 2)
+
+    def test_history_window_starts_in_the_past(self):
+        # Wyze's `begin` (the SDK's `since`) is the oldest time returned, not the newest.
+        self.manager.get_lock_events(LOCK_MAC, limit=1)
+        since = self.client.locks.get_records.call_args.kwargs["since"]
+        self.assertLess(since, datetime.datetime.now() - datetime.timedelta(days=1))
 
 
 class TestLockCache(LockFeatureTestBase):

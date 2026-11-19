@@ -34,6 +34,7 @@ class WyzeClientManager:
     # Wyze rate-limits aggressively, so polling clients share one recent answer.
     LOCK_CACHE_SECONDS = float(os.getenv("WYZE_LOCK_CACHE_SECONDS", "20"))
     GATEWAY_CACHE_SECONDS = 300.0
+    HISTORY_DAYS = 30
 
     LOCK_STATES: ClassVar[dict[int, str]] = {1: "locked", 2: "locking", 3: "unlocked", 4: "unlocking"}
     JAM_EVENTS: ClassVar[set[str]] = {"JAMMED", "TOTALLY_JAMMED"}
@@ -186,7 +187,11 @@ class WyzeClientManager:
 
     def _fetch_records(self, lock_id: str, limit: int) -> list[Any]:
         return list(
-            self.client.locks.get_records(device_mac=lock_id, since=datetime.datetime.now(), limit=limit)
+            self.client.locks.get_records(
+                device_mac=lock_id,
+                since=datetime.datetime.now() - datetime.timedelta(days=self.HISTORY_DAYS),
+                limit=limit,
+            )
         )
 
     def get_lock_events(self, lock_id: str, limit: int = 20) -> list[dict[str, Any]]:
@@ -199,12 +204,16 @@ class WyzeClientManager:
         def fetch() -> int | None:
             try:
                 gateways = [d for d in self.client.devices_list() if d.type == "GateWay"]
-                if not gateways:
-                    return None
-                return self.client.locks.gateways.info(device_mac=gateways[0].mac).rssi
-            except Exception as e:  # SDK gateway support is unreliable
-                print(f"Could not read lock gateway: {e}")
+            except Exception as e:
+                print(f"Could not list devices: {e}")
                 return None
+            if not gateways:
+                return None
+            try:
+                return self._value(self.client.locks.gateways.info(device_mac=gateways[0].mac).rssi)
+            except Exception as e:  # SDK gateway info is unreliable; the device list may carry rssi
+                print(f"Could not read lock gateway: {e}")
+                return self._value(getattr(gateways[0], "rssi", None))
 
         return self._cached("gateway_rssi", self.GATEWAY_CACHE_SECONDS, fetch)
 
