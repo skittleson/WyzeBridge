@@ -68,6 +68,15 @@ rest_command:
       {"lock_action": {{ (lock_action == 'lock') | lower }} }
     timeout: 20
 
+# Optimistic display: Wyze's cloud takes ~45s to report a lock/unlock as done,
+# so right after a command we show the requested state and trust Wyze's status
+# again the moment its cloud reports ANY change (or after 2 minutes, in case
+# the command was lost). This matches the old app/Node-RED fire-and-forget feel.
+input_select:
+  wyze_front_door_display_override:
+    name: "Wyze Front Door display override"
+    options: ["none", "locked", "unlocked"]
+
 script:
   wyze_front_door_command:
     alias: "Wyze Front Door command"
@@ -76,20 +85,55 @@ script:
       lock_action:
         description: "lock or unlock"
     sequence:
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.wyze_front_door_display_override
+        data:
+          option: "{{ 'locked' if lock_action == 'lock' else 'unlocked' }}"
       - action: rest_command.wyze_lock_door
         data:
           lock_action: "{{ lock_action }}"
-      # The bridge clears its cache on a command; re-read once the bolt has moved.
-      - delay: 4
-      - action: homeassistant.update_entity
+
+automation:
+  # Wyze reported a state change: its word beats our optimistic guess.
+  - alias: "Wyze Front Door: clear display override on confirmed state"
+    trigger:
+      - platform: state
+        entity_id: sensor.wyze_front_door_state
+    condition:
+      - condition: template
+        # Only terminal states count; Wyze also reports transient locking/unlocking.
+        value_template: "{{ trigger.to_state.state in ['locked', 'unlocked'] and trigger.to_state.state != trigger.from_state.state }}"
+    action:
+      - action: input_select.select_option
         target:
-          entity_id: sensor.wyze_front_door_state
+          entity_id: input_select.wyze_front_door_display_override
+        data:
+          option: none
+
+  # Command apparently never moved the bolt: stop pretending after 2 minutes.
+  - alias: "Wyze Front Door: expire stale display override"
+    mode: queued
+    trigger:
+      - platform: state
+        entity_id: input_select.wyze_front_door_display_override
+        to: ["locked", "unlocked"]
+    action:
+      - delay: "00:02:00"
+      - action: input_select.select_option
+        target:
+          entity_id: input_select.wyze_front_door_display_override
+        data:
+          option: none
 
 template:
   - lock:
       - unique_id: wyze_front_door
         name: "Wyze Front Door"
-        state: "{{ states('sensor.wyze_front_door_state') }}"
+        state: >-
+          {% set override = states('input_select.wyze_front_door_display_override') %}
+          {{ override if override in ['locked', 'unlocked']
+             else states('sensor.wyze_front_door_state') }}
         availability: >-
           {{ is_state('binary_sensor.wyze_front_door_online', 'on')
              and states('sensor.wyze_front_door_state') not in ['unknown', 'unavailable'] }}
