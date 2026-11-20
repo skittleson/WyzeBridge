@@ -7,19 +7,16 @@ from wyze_client_manager import WyzeClientManager
 
 async def schedule_job(job_function) -> None:
     """
-    Schedules a job function to run periodically.
+    Runs a blocking job periodically WITHOUT freezing the event loop.
 
-    This function takes a job function and a sleep duration,
-    and repeatedly executes the job function while handling
-    potential exceptions. It logs any errors that occur during
-    job execution and continues to the next scheduled run.
-
-    :param job_function: The asynchronous function to be scheduled.
-    :type job_function: callable
+    The wyze_sdk calls here (token refresh, event-image downloads) are
+    synchronous and can take minutes; running them directly on the loop
+    wedged the whole app (HA lock/camera entities went unavailable).
+    asyncio.to_thread keeps the loop responsive while the job runs.
     """
     while True:
         try:
-            job_function()
+            await asyncio.to_thread(job_function)
         except Exception as e:
             print(f"Error in {job_function.__name__}: {e}")
         sleep_minutes = random.randint(10, 60)
