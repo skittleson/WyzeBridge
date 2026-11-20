@@ -1,6 +1,6 @@
 import os
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel
 from wyze_client_manager import WyzeClientManager
@@ -69,22 +69,38 @@ async def get_event(event_id: str) -> Response:
     return Response(content=event_data, media_type="image/jpeg")
 
 # === Cameras (details + cloud events, no live streams) ===
+def _with_image_url(request: Request, camera: dict) -> dict:
+    event = camera.get("last_event")
+    if event and event.get("has_image"):
+        base = str(request.base_url).rstrip("/")
+        event = {**event, "image_url": f"{base}/cameras/{camera['mac']}/latest.jpg?event={event['id']}"}
+        camera = {**camera, "last_event": event}
+    return camera
+
 @app.get("/cameras")
-async def list_cameras() -> dict:
+async def list_cameras(request: Request) -> dict:
     """All cameras; by_mac makes it easy to pick one camera in a Home Assistant template."""
-    cameras = manager.get_cameras()
+    cameras = [_with_image_url(request, c) for c in manager.get_cameras()]
     return {"cameras": cameras, "by_mac": {c["mac"]: c for c in cameras}}
 
 @app.get("/cameras/{mac}")
-async def get_camera(mac: str) -> dict:
+async def get_camera(request: Request, mac: str) -> dict:
     camera = manager.get_camera(mac)
     if camera is None:
         raise HTTPException(status_code=404, detail="Camera not found")
-    return camera
+    return _with_image_url(request, camera)
 
 @app.get("/cameras/{mac}/events")
 async def get_camera_events(mac: str, limit: int = Query(20, ge=1, le=20)) -> dict:
     return {"events": manager.get_camera_events(mac, limit=limit)}
+
+@app.get("/cameras/{mac}/latest.jpg")
+async def get_camera_latest_image(mac: str) -> Response:
+    """The newest event's image; the ?event= query param only busts caches."""
+    image = manager.get_camera_latest_image(mac)
+    if image is None:
+        raise HTTPException(status_code=404, detail="No event image")
+    return Response(content=image, media_type="image/jpeg")
 
 # === Locks ===
 @app.get("/locks")

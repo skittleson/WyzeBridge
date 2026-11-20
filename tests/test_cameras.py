@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from fastapi.testclient import TestClient
 
@@ -13,16 +13,18 @@ from wyze_bridge.wyze_client_manager import WyzeClientManager
 CAM_MAC = "D03F279F990F"
 
 
-def make_event(event_id="e1", minutes_ago=2, tags=("PERSON",)):
+def make_event(event_id="e1", minutes_ago=2, tags=("PERSON",), image="https://wyze.example/e1.jpg"):
     when = datetime.datetime(2026, 11, 19, 15, 0, tzinfo=datetime.timezone.utc) - datetime.timedelta(
         minutes=minutes_ago
     )
+    files = [SimpleNamespace(type=SimpleNamespace(name="IMAGE"), url=image)] if image else []
     return SimpleNamespace(
         id=event_id,
         mac=CAM_MAC,
         time=when,
         alarm_type=SimpleNamespace(name="MOTION", description="Motion"),
         tags=[SimpleNamespace(name=t, description=t.capitalize()) for t in tags],
+        files=files,
     )
 
 
@@ -79,6 +81,7 @@ class TestCameraDetails(CameraTestBase):
         self.assertEqual(event["type"], "Motion")
         self.assertEqual(event["tags"], ["Person"])
         self.assertEqual(event["time"], "2026-11-19T14:58:00+00:00")
+        self.assertTrue(event["has_image"])
 
     def test_only_cameras_are_listed(self):
         self.assertEqual([c["mac"] for c in self.manager.get_cameras()], [CAM_MAC])
@@ -152,6 +155,35 @@ class TestCameraEvents(CameraTestBase):
         self.assertEqual(self.client.events.list.call_args.kwargs["limit"], 20)
 
 
+class TestLatestEventImage(CameraTestBase):
+    def test_downloads_latest_image_once_with_browser_user_agent(self):
+        response = SimpleNamespace(status_code=200, content=b"jpeg")
+        with patch("wyze_bridge.wyze_client_manager.requests.get", return_value=response) as get:
+            self.assertEqual(self.manager.get_camera_latest_image(CAM_MAC), b"jpeg")
+            self.assertEqual(self.manager.get_camera_latest_image(CAM_MAC), b"jpeg")
+        get.assert_called_once()
+        self.assertEqual(get.call_args.args[0], "https://wyze.example/e1.jpg")
+        self.assertIn("Mozilla", get.call_args.kwargs["headers"]["User-Agent"])
+
+    def test_no_image_when_event_has_none(self):
+        self.client.events.list.return_value = [make_event(image=None)]
+        self.assertIsNone(self.manager.get_camera_latest_image(CAM_MAC))
+
+    def test_failed_download_returns_none(self):
+        response = SimpleNamespace(status_code=401, content=b"")
+        with patch("wyze_bridge.wyze_client_manager.requests.get", return_value=response):
+            self.assertIsNone(self.manager.get_camera_latest_image(CAM_MAC))
+
+
+class TestEventImageJob(CameraTestBase):
+    def test_event_image_job_sends_browser_user_agent(self):
+        # Wyze's VerifiedView image host answers 401 to the python-requests user agent.
+        response = SimpleNamespace(status_code=200, content=b"jpeg")
+        with patch("wyze_bridge.wyze_client_manager.requests.get", return_value=response) as get:
+            self.manager.download("https://wyze.example/x.jpg", os.path.join(self.tmp.name, "x.jpg"))
+        self.assertIn("Mozilla", get.call_args.kwargs["headers"]["User-Agent"])
+
+
 class TestCameraApi(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -168,6 +200,15 @@ class TestCameraApi(unittest.TestCase):
         self.api.manager = self.manager
         self.http = TestClient(self.api.app)
 
+    def test_cameras_include_absolute_image_url(self):
+        self.manager.get_cameras.return_value = [
+            {"mac": CAM_MAC, "last_event": {"id": "e1", "has_image": True}},
+            {"mac": "OTHER", "last_event": None},
+        ]
+        cams = self.http.get("/cameras").json()["cameras"]
+        self.assertEqual(cams[0]["last_event"]["image_url"], f"http://testserver/cameras/{CAM_MAC}/latest.jpg?event=e1")
+        self.assertIsNone(cams[1]["last_event"])
+
     def test_cameras_keyed_by_mac(self):
         self.manager.get_cameras.return_value = [{"mac": CAM_MAC, "last_event": None}]
         self.assertIn(CAM_MAC, self.http.get("/cameras").json()["by_mac"])
@@ -180,6 +221,16 @@ class TestCameraApi(unittest.TestCase):
         self.manager.get_camera_events.return_value = [{"id": "a"}]
         self.assertEqual(self.http.get(f"/cameras/{CAM_MAC}/events?limit=3").json(), {"events": [{"id": "a"}]})
         self.manager.get_camera_events.assert_called_once_with(CAM_MAC, limit=3)
+
+    def test_latest_image(self):
+        self.manager.get_camera_latest_image.return_value = b"jpeg"
+        response = self.http.get(f"/cameras/{CAM_MAC}/latest.jpg")
+        self.assertEqual(response.content, b"jpeg")
+        self.assertEqual(response.headers["content-type"], "image/jpeg")
+
+    def test_latest_image_missing(self):
+        self.manager.get_camera_latest_image.return_value = None
+        self.assertEqual(self.http.get(f"/cameras/{CAM_MAC}/latest.jpg").status_code, 404)
 
 
 if __name__ == "__main__":

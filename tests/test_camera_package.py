@@ -39,6 +39,12 @@ class TestCameraPackage(unittest.TestCase):
         self.assertEqual(len(self.template["sensor"]), 2 * len(CAMERAS))
         self.assertEqual(len(self.template["binary_sensor"]), 2 * len(CAMERAS))
 
+    def test_image_entity_per_camera(self):
+        images = self.template["image"]
+        self.assertEqual(len(images), len(CAMERAS))
+        gate = next(e for e in images if e["name"] == "Gate Cam Last Event Image")
+        self.assertIn("'D03F279F990F'", gate["url"])
+
     def test_unique_ids_are_unique(self):
         ids = [e["unique_id"] for kind in self.template.values() for e in kind]
         self.assertEqual(len(ids), len(set(ids)))

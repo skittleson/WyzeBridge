@@ -31,6 +31,13 @@ class WyzeClientManager:
     # Default directory for event images.
     DEFAULT_OUTPUT_DIR = "../event_images"
 
+    # Wyze's VerifiedView image host (prod-sight-safe-auth.wyze.com) answers
+    # 401 "Access token is invalid" to python-requests' default user agent
+    # (since ~2026-06-18) and redirects browsers to the signed blob URL.
+    IMAGE_HEADERS = {
+        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"
+    }
+
     # Wyze rate-limits aggressively, so polling clients share one recent answer.
     LOCK_CACHE_SECONDS = float(os.getenv("WYZE_LOCK_CACHE_SECONDS", "20"))
     GATEWAY_CACHE_SECONDS = 300.0
@@ -69,7 +76,7 @@ class WyzeClientManager:
         if os.path.exists(file_path):
             return  # Skip existing files.
         try:
-            response = requests.get(url)
+            response = requests.get(url, headers=self.IMAGE_HEADERS, timeout=20)
             if response.status_code == 200:
                 with open(file_path, "wb") as f:
                     f.write(response.content)
@@ -254,6 +261,13 @@ class WyzeClientManager:
     MAX_EVENTS = 20  # Wyze's event list API refuses more
 
     @staticmethod
+    def _image_url(event: Any) -> str | None:
+        for file in getattr(event, "files", None) or []:
+            if getattr(getattr(file, "type", None), "name", None) == "IMAGE" and file.url:
+                return file.url
+        return None
+
+    @staticmethod
     def _event_time(event: Any) -> datetime.datetime:
         value = event.time
         if isinstance(value, (int, float)):  # the SDK sometimes passes Wyze's epoch ms through
@@ -274,6 +288,7 @@ class WyzeClientManager:
             "time": event_time,
             "type": getattr(alarm, "description", None) or str(alarm),
             "tags": [getattr(t, "description", str(t)) for t in (getattr(event, "tags", None) or []) if t],
+            "has_image": self._image_url(event) is not None,
         }
 
     SEED_DAYS = 30
@@ -349,6 +364,26 @@ class WyzeClientManager:
             lambda: list(self.client.events.list(device_ids=[mac], limit=limit)),
         )
         return [self._camera_event_to_dict(e) for e in events]
+
+    def get_camera_latest_image(self, mac: str) -> bytes | None:
+        camera = next((c for c in self._camera_list() if c.mac == mac), None)
+        latest = self._latest_camera_event(camera) if camera else None
+        url = self._image_url(latest) if latest else None
+        if url is None:
+            return None
+        path = os.path.join(self.OUTPUT_DIR, f"latest_{mac}_{latest.id}.jpg")
+        if not os.path.exists(path):
+            response = requests.get(url, headers=self.IMAGE_HEADERS, timeout=20)
+            if response.status_code != 200:
+                print(f"Could not fetch event image for {mac}: HTTP {response.status_code}")
+                return None
+            for old in os.listdir(self.OUTPUT_DIR):
+                if old.startswith(f"latest_{mac}_"):
+                    os.remove(os.path.join(self.OUTPUT_DIR, old))
+            with open(path, "wb") as f:
+                f.write(response.content)
+        with open(path, "rb") as f:
+            return f.read()
 
     def get_devices(self, filter_query=None, orderby=None, select=None):
         devices = self.client.devices_list()

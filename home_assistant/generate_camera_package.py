@@ -76,12 +76,20 @@ def camera_entities(mac: str, name: str) -> dict[str, list[dict]]:
                 f"{{{{ e is not none and (now() - as_datetime(e.time)).total_seconds() < {RECENT_SECONDS} }}}}",
             },
         ],
+        "image": [
+            {
+                "name": f"{name} Last Event Image",
+                "unique_id": f"{uid}_last_event_image",
+                "availability": f"{{{{ ({event} or {{}}).get('image_url') is not none }}}}",
+                "url": f"{{{{ ({event} or {{}}).get('image_url', '') }}}}",
+            }
+        ],
     }
 
 
 def build_package(cameras: list[dict]) -> dict:
     names = camera_names(cameras)
-    template: dict[str, list[dict]] = {"sensor": [], "binary_sensor": []}
+    template: dict[str, list[dict]] = {"sensor": [], "binary_sensor": [], "image": []}
     for cam in sorted(cameras, key=lambda c: names[c["mac"]].lower()):
         for kind, entities in camera_entities(cam["mac"], names[cam["mac"]]).items():
             template[kind].extend(entities)

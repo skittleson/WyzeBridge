@@ -102,6 +102,7 @@ All endpoints use **JSON** for responses and accept the same where applicable.
 | `GET`  | `/cameras` | Every camera with basic details (`nickname`, `model`, `online`, `firmware`, `ip`, `rssi`, `ssid`, `battery`) and its newest cloud event (`id`, `time`, `type`, `tags`). Also `by_mac`, the same cameras keyed by MAC. Cached for `WYZE_CAMERA_CACHE_SECONDS` (default 60). |
 | `GET`  | `/cameras/{mac}` | One camera. |
 | `GET`  | `/cameras/{mac}/events?limit=N` | That camera's recent cloud events, newest first (1-20; Wyze refuses more). |
+| `GET`  | `/cameras/{mac}/latest.jpg` | The newest event's image (downloaded once per event). `last_event.image_url` links here with an `?event=` cache-buster. |
 
 > **Caching:** lock status and history are cached for `WYZE_LOCK_CACHE_SECONDS` (default 20) so several Home Assistant pollers share one Wyze call; Wyze rate-limits heavily. Any lock or unlock command clears the cache. Gateway signal is cached for 5 minutes.
 
@@ -136,7 +137,7 @@ Find the lock MAC with `GET /locks`.
 
 ### Cameras
 
-No live streams: the bridge reads Wyze's cloud for camera details and motion events. Each refresh makes one shared event call (Wyze returns the 20 newest events across all cameras) and looks up one camera that has no event yet, so quiet cameras fill in over the first few minutes. Event images aren't available: Wyze's VerifiedView image links (`prod-sight-safe-auth.wyze.com`) return 401.
+No live streams: the bridge reads Wyze's cloud for camera details and motion events. Each refresh makes one shared event call (Wyze returns the 20 newest events across all cameras) and looks up one camera that has no event yet, so quiet cameras fill in over the first few minutes. Event images come from Wyze's VerifiedView links (`prod-sight-safe-auth.wyze.com`). Since about June 2026 that host answers `401 Access token is invalid` to python-requests' default user agent, so the bridge downloads them with a browser user agent.
 
 Generate the HA package from your camera list, and set `WYZE_CAMERAS_URL=http://<bridge-host>:7020/cameras` in the HA container's environment the same way as `WYZE_LOCK_URL`:
 
@@ -144,4 +145,4 @@ Generate the HA package from your camera list, and set `WYZE_CAMERAS_URL=http://
 python home_assistant/generate_camera_package.py http://<bridge-host>:7020/cameras > packages/wyze_cameras.yaml
 ```
 
-Each camera gets `<name> Last Event` (with `event_id`, `time`, `tags` attributes), `<name> Last Event Time`, `<name> Online` (with model, firmware, IP, Wi-Fi signal and battery attributes) and `<name> Recent Event` (on for 5 minutes after an event). Cameras with the same nickname get the last 4 characters of their MAC added to the name. Re-run the generator when cameras are added or renamed.
+Each camera gets `<name> Last Event` (with `event_id`, `time`, `tags` attributes), `<name> Last Event Time`, `<name> Online` (with model, firmware, IP, Wi-Fi signal and battery attributes) `<name> Recent Event` (on for 5 minutes after an event) and `<name> Last Event Image`. Cameras with the same nickname get the last 4 characters of their MAC added to the name. Re-run the generator when cameras are added or renamed.
