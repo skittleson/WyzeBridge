@@ -1,4 +1,5 @@
 import datetime
+import inspect
 import os
 import sys
 import tempfile
@@ -213,3 +214,55 @@ class TestLockApi(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestStaleOnWyzeHang(LockFeatureTestBase):
+    """A Wyze hang must not make HA's entities go unavailable."""
+
+    def test_stale_value_served_when_wyze_fails_after_ttl(self):
+        first = self.manager.get_lock_status(LOCK_MAC)
+        self.clock.now += 60  # TTL expired
+        self.client.locks.info.side_effect = Exception("read timeout")
+        second = self.manager.get_lock_status(LOCK_MAC)
+        self.assertEqual(second["state"], first["state"])
+
+    def test_error_when_no_value_ever_fetched(self):
+        self.client.locks.info.side_effect = Exception("read timeout")
+        self.assertIsNone(self.manager.get_lock_status(LOCK_MAC))
+
+    def test_grace_window_expires(self):
+        self.manager.get_lock_status(LOCK_MAC)
+        self.clock.now += 60 * 60  # an hour past: stale data is a lie
+        self.client.locks.info.side_effect = Exception("read timeout")
+        self.assertIsNone(self.manager.get_lock_status(LOCK_MAC))
+
+
+class TestWyzeTimeoutPatched(unittest.TestCase):
+    def test_sdk_requests_get_a_default_timeout(self):
+        # wyze_sdk calls session.send with no timeout, so a hung
+        # api.wyzecam.com read blocks a worker forever. Our import patches
+        # HTTPAdapter.send to inject a default timeout when none is given.
+        import requests
+
+        from wyze_bridge import wyze_client_manager as wcm
+
+        captured = {}
+
+        def fake_original(self, request, **kwargs):
+            captured.update(kwargs)
+            raise requests.exceptions.ConnectionError("stop here")
+
+        wcm._original_send = fake_original
+        try:
+            requests.get("https://example.invalid/", timeout=None)
+        except requests.exceptions.ConnectionError:
+            pass
+        self.assertIsNotNone(captured.get("timeout"))
+
+        # an explicit timeout must be respected, not overridden
+        captured.clear()
+        try:
+            requests.get("https://example.invalid/", timeout=3)
+        except requests.exceptions.ConnectionError:
+            pass
+        self.assertEqual(captured["timeout"], 3)

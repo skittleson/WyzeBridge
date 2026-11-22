@@ -11,6 +11,23 @@ from collections.abc import Callable
 from typing import Any, ClassVar, Dict, List, Optional
 
 import requests
+import requests.adapters
+
+# wyze_sdk builds a fresh requests.Session per call and sends with NO timeout,
+# so a hung api.wyzecam.com read blocks a FastAPI worker thread forever, and
+# Home Assistant then marks every entity unavailable (observed ~weekly). Inject
+# a default timeout for any send that does not specify one.
+DEFAULT_REQUEST_TIMEOUT = float(os.getenv("WYZE_REQUEST_TIMEOUT", "15"))
+_original_send = requests.adapters.HTTPAdapter.send
+
+
+def _send_with_timeout(self, request, **kwargs):
+    if kwargs.get("timeout") is None:
+        kwargs["timeout"] = DEFAULT_REQUEST_TIMEOUT
+    return _original_send(self, request, **kwargs)
+
+
+requests.adapters.HTTPAdapter.send = _send_with_timeout
 
 # Try to import the real SDK; fallback to a minimal stub.
 try:
@@ -164,12 +181,22 @@ class WyzeClientManager:
     def clear_cache(self) -> None:
         self._cache = {}
 
+    # When Wyze fails after the TTL, keep serving the last good value for
+    # this long: a stale state beats an "unavailable" flip, and Wyze's own
+    # events correct it as soon as it recovers.
+    STALE_GRACE_SECONDS = 15 * 60
+
     def _cached(self, key: str, ttl: float, fetch: Callable[[], Any]) -> Any:
         now = self._clock()
         hit = self._cache.get(key)
         if hit is not None and now - hit[0] < ttl:
             return hit[1]
-        value = fetch()
+        try:
+            value = fetch()
+        except Exception:
+            if hit is not None and now - hit[0] < max(ttl, self.STALE_GRACE_SECONDS):
+                return hit[1]
+            raise
         self._cache[key] = (now, value)
         return value
 
@@ -225,9 +252,13 @@ class WyzeClientManager:
         return self._cached("gateway_rssi", self.GATEWAY_CACHE_SECONDS, fetch)
 
     def get_lock_status(self, lock_id: str) -> dict[str, Any] | None:
-        info = self._cached(
-            f"info:{lock_id}", self.LOCK_CACHE_SECONDS, lambda: self.client.locks.info(device_mac=lock_id)
-        )
+        try:
+            info = self._cached(
+                f"info:{lock_id}", self.LOCK_CACHE_SECONDS, lambda: self.client.locks.info(device_mac=lock_id)
+            )
+        except Exception as e:  # no current or stale value: report it as unknown
+            print(f"Could not read lock status: {e}")
+            return None
         if info is None:
             return None
         try:
